@@ -1,8 +1,17 @@
 extern crate proc_macro;
 
+use syn::spanned::Spanned;
+
+
 #[proc_macro_attribute]
 pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut input = syn::parse_macro_input!(item as syn::DeriveInput);
+    let mut input: syn::DeriveInput = match syn::parse(item) {
+        Ok(input) => input,
+        Err(err) => return syn::Error::new(
+            err.span(),
+            "only enums with unit variants are supported"
+        ).into_compile_error().into()
+    };
 
     let ident = &input.ident;
 
@@ -13,6 +22,13 @@ pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream)
             let mut match_inner = proc_macro2::TokenStream::new();
 
             for variant in variants {
+                if !matches!(variant.fields, syn::Fields::Unit) {
+                    return syn::Error::new(
+                        variant.span(),
+                        "only unit variants are supported"
+                    ).into_compile_error().into();
+                }
+
                 let v_ident = &variant.ident;
 
                 match_inner.extend(quote::quote! {
@@ -20,7 +36,7 @@ pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream)
                 });
             }
 
-            quote::quote! {
+            quote::quote!{
                 #[repr(u8)]
                 #input
 
@@ -44,6 +60,17 @@ pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream)
                 }
             }.into()
         },
-        _ => quote::quote! { compile_error!("only enums are supported"); }.into(),
+        syn::Data::Struct( syn::DataStruct { struct_token, .. } ) => {
+            syn::Error::new(
+                struct_token.span,
+                "only enums with unit variants are supported"
+            ).into_compile_error().into()
+        },
+        syn::Data::Union( syn::DataUnion { union_token, .. } ) => {
+            syn::Error::new(
+                union_token.span,
+                "only enums with unit variants are supported"
+            ).into_compile_error().into()
+        }
     }
 }
