@@ -4,13 +4,23 @@ use syn::spanned::Spanned;
 
 
 #[proc_macro_attribute]
-pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut input: syn::DeriveInput = match syn::parse(item) {
+pub fn enum_const(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    enum_const_impl(attr.into(), item.into())
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+
+fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+    let mut input: syn::DeriveInput = match syn::parse2(item) {
         Ok(input) => input,
-        Err(err) => return syn::Error::new(
-            err.span(),
-            "only enums with unit variants are supported"
-        ).into_compile_error().into()
+        Err(err) => {
+            println!("{err}");
+            return Err(syn::Error::new(
+                err.span(),
+                "expected an enum",
+            ))
+        }
     };
 
     let ident = &input.ident;
@@ -23,10 +33,10 @@ pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream)
 
             for variant in variants {
                 if !matches!(variant.fields, syn::Fields::Unit) {
-                    return syn::Error::new(
+                    return Err(syn::Error::new(
                         variant.span(),
-                        "only unit variants are supported"
-                    ).into_compile_error().into();
+                        "expected a unit variant"
+                    ))
                 }
 
                 let v_ident = &variant.ident;
@@ -36,7 +46,7 @@ pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream)
                 });
             }
 
-            quote::quote!{
+            Ok(quote::quote!{
                 #[repr(u8)]
                 #input
 
@@ -58,19 +68,86 @@ pub fn enum_const(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream)
                         }
                     }
                 }
-            }.into()
+            }.into())
         },
         syn::Data::Struct( syn::DataStruct { struct_token, .. } ) => {
-            syn::Error::new(
+            Err(syn::Error::new(
                 struct_token.span,
-                "only enums with unit variants are supported"
-            ).into_compile_error().into()
+                "expected an enum"
+            ))
         },
         syn::Data::Union( syn::DataUnion { union_token, .. } ) => {
-            syn::Error::new(
+            Err(syn::Error::new(
                 union_token.span,
-                "only enums with unit variants are supported"
-            ).into_compile_error().into()
+                "expected an enum"
+            ))
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_struct() {
+        let input = quote::quote!{
+            struct Unit;
+        };
+
+        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+
+        assert!(result.is_err());
+
+        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+    }
+
+    #[test]
+    fn tuple_struct() {
+        let input = quote::quote!{
+            struct Tuple(i32, i32);
+        };
+
+        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+
+        assert!(result.is_err());
+
+        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+    }
+
+    #[test]
+    fn named_struct() {
+        let input = quote::quote!{
+            struct Named {
+                x: f32,
+                y: f32
+            }
+        };
+
+        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+
+        assert!(result.is_err());
+
+        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+    }
+
+    #[test]
+    fn mixed_enum() {
+        let input = quote::quote!{
+            enum Mixed {
+                A,
+                B(i32, i32),
+                C { x: f32, y: f32 },
+                D(),
+                E { }
+            }
+        };
+
+        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+
+        assert!(result.is_err());
+
+        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
     }
 }
