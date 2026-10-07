@@ -12,7 +12,7 @@ pub fn enum_const(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) 
 
 
 fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
-    let mut input: syn::DeriveInput = match syn::parse2(item) {
+    let input: syn::DeriveInput = match syn::parse2(item) {
         Ok(input) => input,
         Err(err) => {
             println!("{err}");
@@ -23,9 +23,16 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
         }
     };
 
-    let ident = &input.ident;
+    for attr in input.attrs.iter() {
+        if attr.path().is_ident("repr") {
+            return Err(syn::Error::new(
+                attr.span(),
+                "this macro implicitly adds a `#[repr(u8)]` attribute",
+            ))
+        }
+    }
 
-    input.attrs.retain(|attr| !attr.path().is_ident("repr"));
+    let ident = &input.ident;
 
     match &input.data {
         syn::Data::Enum( syn::DataEnum { variants, .. } ) => {
@@ -90,12 +97,15 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
 mod tests {
     use super::*;
 
-    #[test]
-    fn unit_struct() {
-        let input = quote::quote!{
-            struct Unit;
-        };
+    fn test_ok(input: proc_macro2::TokenStream) {
+        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
 
+        assert!(result.is_ok());
+
+        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+    }
+
+    fn test_err(input: proc_macro2::TokenStream) {
         let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
 
         assert!(result.is_err());
@@ -104,16 +114,21 @@ mod tests {
     }
 
     #[test]
+    fn unit_struct() {
+        let input = quote::quote!{
+            struct Unit;
+        };
+
+        test_err(input);
+    }
+
+    #[test]
     fn tuple_struct() {
         let input = quote::quote!{
             struct Tuple(i32, i32);
         };
 
-        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
-
-        assert!(result.is_err());
-
-        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+        test_err(input);
     }
 
     #[test]
@@ -125,11 +140,7 @@ mod tests {
             }
         };
 
-        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
-
-        assert!(result.is_err());
-
-        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+        test_err(input);
     }
 
     #[test]
@@ -144,10 +155,35 @@ mod tests {
             }
         };
 
-        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+        test_err(input);
+    }
 
-        assert!(result.is_err());
+    #[test]
+    fn unit_enum() {
+        let input = quote::quote!{
+            enum Unit {
+                A,
+                B,
+                C,
+                D
+            }
+        };
 
-        println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
+        test_ok(input);
+    }
+
+    #[test]
+    fn with_repr() {
+        let input = quote::quote!{
+            #[repr(i16)]
+            enum WithRepr {
+                A,
+                B,
+                C,
+                D
+            }
+        };
+
+        test_err(input);
     }
 }
