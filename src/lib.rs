@@ -12,6 +12,8 @@ pub fn enum_const(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) 
 
 
 fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+    // TODO: parse attributes to allow for skipping enum discriminants
+
     let input: syn::DeriveInput = match syn::parse2(item) {
         Ok(input) => input,
         Err(err) => {
