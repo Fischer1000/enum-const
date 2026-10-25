@@ -66,12 +66,12 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
 
                 #[automatically_derived]
                 impl TryFrom<u8> for #ident {
-                    type Error = ();
+                    type Error = u8;
 
                     fn try_from(value: u8) -> Result<Self, Self::Error> {
                         match value {
                             #match_inner
-                            _ => Err(()),
+                            v => Err(v),
                         }
                     }
                 }
