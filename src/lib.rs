@@ -11,8 +11,16 @@ pub fn enum_const(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) 
 }
 
 
-fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
-    // TODO: parse attributes to allow for skipping enum discriminants
+fn enum_const_impl(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+    let mut skipped_discriminants = attr.to_string()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::parse)
+        .collect::<Result<Vec<u8>, _>>()
+        .map_err(|_| syn::Error::new(attr.span(), "values could not be parsed as u8"))?;
+
+    skipped_discriminants.sort_unstable_by(|a, b| b.cmp(a)); // In reverse order
 
     let input: syn::DeriveInput = match syn::parse2(item) {
         Ok(input) => input,
@@ -25,6 +33,8 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
         }
     };
 
+    let mut attrs = proc_macro2::TokenStream::new();
+
     for attr in input.attrs.iter() {
         if attr.path().is_ident("repr") {
             return Err(syn::Error::new(
@@ -32,13 +42,19 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
                 "this macro implicitly adds a `#[repr(u8)]` attribute",
             ))
         }
+
+        attrs.extend(quote::quote! { #attr })
     }
 
     let ident = &input.ident;
+    let vis = &input.vis;
 
     match &input.data {
         syn::Data::Enum( syn::DataEnum { variants, .. } ) => {
+            let mut enum_inner = proc_macro2::TokenStream::new();
             let mut match_inner = proc_macro2::TokenStream::new();
+
+            let mut discriminant: u8 = 0;
 
             for variant in variants {
                 if !matches!(variant.fields, syn::Fields::Unit) {
@@ -53,11 +69,44 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
                 match_inner.extend(quote::quote! {
                     x if x == #ident::#v_ident as u8 => Ok(#ident::#v_ident),
                 });
+
+
+                while Some(&discriminant) == skipped_discriminants.last() {
+                    discriminant = discriminant.checked_add(1)
+                        .ok_or(syn::Error::new(variant.span(), "discriminant does not fit into u8"))?;
+
+                    skipped_discriminants.pop();
+                }
+
+                let mut variant_attrs = proc_macro2::TokenStream::new();
+
+                for attr in variant.attrs.iter() {
+                    variant_attrs.extend(quote::quote! { #attr });
+                }
+
+                let variant_ident = &variant.ident;
+
+                if let Some((_, ref expr)) = variant.discriminant {
+                    return Err(syn::Error::new(expr.span(), "manual discriminants are not allowed"));
+                }
+
+                let discr = syn::Expr::Lit(syn::ExprLit { attrs: Vec::new(), lit: syn::Lit::Int(syn::LitInt::new(&discriminant.to_string(), variant.span())) });
+
+                discriminant = discriminant.checked_add(1)
+                    .ok_or(syn::Error::new(variant.span(), "discriminant does not fit into u8"))?;
+
+                enum_inner.extend(quote::quote! {
+                    #variant_attrs
+                    #variant_ident = #discr,
+                });
             }
 
             Ok(quote::quote!{
                 #[repr(u8)]
-                #input
+                #attrs
+                #vis enum #ident {
+                    #enum_inner
+                }
 
                 #[automatically_derived]
                 impl From<#ident> for u8 {
@@ -99,21 +148,31 @@ fn enum_const_impl(_attr: proc_macro2::TokenStream, item: proc_macro2::TokenStre
 mod tests {
     use super::*;
 
+
     fn test_ok(input: proc_macro2::TokenStream) {
-        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+        test_ok_attr(proc_macro2::TokenStream::new(), input);
+    }
+
+    fn test_err(input: proc_macro2::TokenStream) {
+        test_err_attr(proc_macro2::TokenStream::new(), input);
+    }
+
+    fn test_ok_attr(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStream) {
+        let result = enum_const_impl(attr, input);
 
         assert!(result.is_ok());
 
         println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
     }
 
-    fn test_err(input: proc_macro2::TokenStream) {
-        let result = enum_const_impl(proc_macro2::TokenStream::new(), input);
+    fn test_err_attr(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStream) {
+        let result = enum_const_impl(attr, input);
 
         assert!(result.is_err());
 
         println!("{}", result.unwrap_or_else(|e| e.to_compile_error()));
     }
+
 
     #[test]
     fn unit_struct() {
@@ -187,5 +246,53 @@ mod tests {
         };
 
         test_err(input);
+    }
+
+    #[test]
+    fn discriminants_ok() {
+        let attr = quote::quote!{ 1, 3, 4 };
+
+        let input = quote::quote!{
+            enum DiscriminantOk {
+                A,
+                B,
+                C,
+                D
+            }
+        };
+
+        test_ok_attr(attr, input);
+    }
+
+    #[test]
+    fn discriminants_err() {
+        let attr = quote::quote!{ 1, foo, 4 };
+
+        let input = quote::quote!{
+            enum DiscriminantErr {
+                A,
+                B,
+                C,
+                D
+            }
+        };
+
+        test_err_attr(attr, input);
+    }
+
+    #[test]
+    fn discriminants_man() {
+        let attr = quote::quote!{ 1, 3, 4 };
+
+        let input = quote::quote!{
+            enum DiscriminantOk {
+                A = 0,
+                B = 6,
+                C,
+                D
+            }
+        };
+
+        test_err_attr(attr, input);
     }
 }
