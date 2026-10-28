@@ -16,7 +16,7 @@ fn enum_const_impl(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::parse)
+        .map(parse_u8)
         .collect::<Result<Vec<u8>, _>>()
         .map_err(|_| syn::Error::new(attr.span(), "values could not be parsed as u8"))?;
 
@@ -140,6 +140,17 @@ fn enum_const_impl(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStrea
                 "expected an enum"
             ))
         }
+    }
+}
+
+
+fn parse_u8(s: &str) -> Result<u8, <u8 as std::str::FromStr>::Err> {
+    match s.strip_prefix("b'") {
+        Some(rest) => match rest.strip_suffix("'") {
+            Some(inner) => if inner.len() == 1 { Ok(inner.as_bytes()[0]) } else { s.parse() },
+            None => s.parse(),
+        },
+        None => s.parse()
     }
 }
 
@@ -285,7 +296,7 @@ mod tests {
         let attr = quote::quote!{ 1, 3, 4 };
 
         let input = quote::quote!{
-            enum DiscriminantOk {
+            enum DiscriminantMan {
                 A = 0,
                 B = 6,
                 C,
@@ -294,5 +305,21 @@ mod tests {
         };
 
         test_err_attr(attr, input);
+    }
+
+    #[test]
+    fn discriminants_b() {
+        let attr = quote::quote!{ b'G', 2, b'c', 10 };
+
+        let input = quote::quote!{
+            enum DiscriminantB {
+                A,
+                B,
+                C,
+                D
+            }
+        };
+
+        test_ok_attr(attr, input);
     }
 }
